@@ -122,6 +122,34 @@ The local API documentation is available at:
 ```text
 http://127.0.0.1:8000/docs
 ```
+### 4. Running automated tests
+
+The backend includes automated tests for the main parent pathways and safety-routing behaviour.
+
+Open a terminal and run:
+
+```cmd
+cd /d X:\oral-health-chatbot
+conda activate oral-health-chatbot
+cd backend
+python -m pytest -q
+```
+
+Expected result:
+
+```text
+7 passed
+```
+
+The current tests verify:
+
+- The backend health-check endpoint is available.
+- Toothbrushing questions use the brushing pathway.
+- Toothache questions use the toothache pathway.
+- Urgent dental questions use the urgent pathway.
+- Facial swelling with breathing difficulty is treated as an emergency.
+- Unrecognised questions use the general-information pathway.
+- Empty messages are rejected by the API.
 
 ## Suggested supervisor demonstration
 
