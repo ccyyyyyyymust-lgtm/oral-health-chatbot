@@ -5,12 +5,23 @@ type Message = {
   role: 'assistant' | 'user'
   text: string
   urgent?: boolean
+  sources?: SourceLink[]
+}
+
+type SourceLink = {
+  title: string
+  url: string
 }
 
 type ChatApiResponse = {
   reply: string
   category: 'general' | 'brushing' | 'toothache' | 'urgent'
   urgent: boolean
+  region: Region
+  age_group: AgeGroup
+  needs_age_group: boolean
+  source_gap: boolean
+  sources: SourceLink[]
 }
 
 type QuickQuestion = {
@@ -19,6 +30,25 @@ type QuickQuestion = {
   description: string
   question: string
 }
+
+type Region =
+  | 'England'
+  | 'Wales'
+  | 'Scotland'
+  | 'Northern Ireland'
+  | 'Not sure'
+
+type AgeGroup = 'Not provided' | '0-3' | '3-6' | '7+'
+
+const regions: Region[] = [
+  'England',
+  'Wales',
+  'Scotland',
+  'Northern Ireland',
+  'Not sure',
+]
+
+const ageGroups: AgeGroup[] = ['Not provided', '0-3', '3-6', '7+']
 
 const quickQuestions: QuickQuestion[] = [
   {
@@ -56,6 +86,8 @@ function App() {
   ])
 
   const [input, setInput] = useState('')
+  const [region, setRegion] = useState<Region>('Not sure')
+  const [ageGroup, setAgeGroup] = useState<AgeGroup>('Not provided')
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
 
@@ -81,7 +113,11 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message: trimmedQuestion }),
+        body: JSON.stringify({
+          message: trimmedQuestion,
+          region,
+          age_group: ageGroup,
+        }),
       })
 
       if (!response.ok) {
@@ -96,6 +132,7 @@ function App() {
           role: 'assistant',
           text: data.reply,
           urgent: data.urgent,
+          sources: data.sources,
         },
       ])
     } catch {
@@ -139,6 +176,38 @@ function App() {
             <span>Safety prompts</span>
             <span>API connected</span>
           </div>
+        </section>
+
+        <section className="context-section" aria-label="Parent context">
+          <label>
+            <span>Location</span>
+            <select
+              value={region}
+              onChange={(event) => setRegion(event.target.value as Region)}
+              disabled={isSending}
+            >
+              {regions.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            <span>Child age</span>
+            <select
+              value={ageGroup}
+              onChange={(event) => setAgeGroup(event.target.value as AgeGroup)}
+              disabled={isSending}
+            >
+              {ageGroups.map((item) => (
+                <option key={item} value={item}>
+                  {item === 'Not provided' ? 'Not provided yet' : item}
+                </option>
+              ))}
+            </select>
+          </label>
         </section>
 
         <section className="scenario-section" aria-label="Demonstration scenarios">
@@ -185,6 +254,21 @@ function App() {
                 <span className="message-label">Urgent pathway</span>
               )}
               <p>{message.text}</p>
+              {message.sources && message.sources.length > 0 && (
+                <div className="source-links" aria-label="Sources">
+                  <span>Sources</span>
+                  {message.sources.map((source) => (
+                    <a
+                      key={source.url}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {source.title}
+                    </a>
+                  ))}
+                </div>
+              )}
             </article>
           ))}
         </section>
