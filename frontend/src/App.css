@@ -396,6 +396,16 @@ h1 {
   line-height: 1.4;
 }
 
+.sending-status {
+  align-self: flex-start;
+  margin: 0;
+  padding: 8px 11px;
+  border-radius: 12px;
+  color: #557287;
+  background: #edf4f7;
+  font-size: 12px;
+}
+
 .safety-note {
   padding-top: 13px;
   border-top: 1px solid #d9e7ed;

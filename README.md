@@ -6,7 +6,7 @@ A mobile-friendly, parent-facing oral-health chatbot prototype developed for a U
 
 This project explores how a safety-first chat interface could help parents access clear, general information about children's oral health.
 
-The current version is an early demonstration prototype. It shows a parent-facing mobile interface, a FastAPI backend, rule-based safety routing, parent context fields, and source links while the approved clinical knowledge base is still pending.
+The current version is an early demonstration prototype. It combines a parent-facing mobile interface, a FastAPI backend, deterministic safety routing, reviewed local knowledge retrieval, optional Hugging Face chat completion, conversation context, and source links.
 
 The prototype does not diagnose dental conditions. It does not replace professional dental advice and is not an NHS service.
 
@@ -23,7 +23,7 @@ The prototype currently supports three parent pathways:
 3. **Urgent symptoms**
    Safety-focused routing for symptoms such as facial swelling, breathing difficulty, uncontrolled bleeding, or dental injury.
 
-The current response logic is deliberately limited and rule-based. It is intended to demonstrate the product flow, safety hierarchy, and future source-traceability structure before RAG or LLM integration.
+Explicit emergency wording is handled by deterministic rules before any model call. Other questions retrieve short, reviewed NHS and Delivering Better Oral Health passages. When Hugging Face is configured, the model receives recent conversation context plus that evidence. If the model is unavailable, the API automatically returns a rule-based or retrieval-based fallback.
 
 ## System architecture
 
@@ -33,20 +33,21 @@ flowchart LR
     F["React + Vite frontend<br/>Mobile chat interface<br/>Location and child-age controls"]
     A["FastAPI backend<br/>POST /api/chat"]
     C["Context handling<br/>Region and DBH age group"]
-    R["Safety-routing logic<br/>Brushing / toothache / urgent symptoms"]
-    S["Source links<br/>NHS / NHS 111 Wales / DBH PDF"]
+    R["Independent safety layer<br/>Immediate / urgent symptoms"]
+    S["Reviewed retrieval<br/>NHS / NHS 111 Wales / DBOH"]
+    L["Optional Hugging Face LLM<br/>Evidence-grounded response"]
     G["General guidance response"]
     U["Urgent pathway response<br/>Visible alert styling"]
-    K["Future: approved clinical knowledge base<br/>RAG retrieval and source traceability"]
 
     P --> F
     F -->|"JSON request"| A
     A --> C
     C --> R
     R --> S
-    R --> G
+    S --> L
+    L --> G
+    S --> G
     R --> U
-    K -. planned integration .-> A
 ```
 
 ## Current features
@@ -54,6 +55,7 @@ flowchart LR
 * Mobile-friendly parent-facing chat interface.
 * Three fixed demonstration scenarios.
 * Free-text question input.
+* Up to 10 recent user/assistant messages sent as conversation context.
 * Location selector: England, Wales, Scotland, Northern Ireland, or Not sure.
 * Child-age selector based on Delivering better oral health age groups: 0-3, 3-6, or 7+.
 * Age-sensitive questions ask for an age group only when needed.
@@ -61,6 +63,13 @@ flowchart LR
 * React frontend connected to a FastAPI backend.
 * `POST /api/chat` endpoint for chat requests.
 * Distinct general, toothache, and urgent response pathways.
+* Deterministic emergency checks run before retrieval or model generation.
+* Local retrieval over reviewed NHS and DBOH summaries with source traceability.
+* Optional Hugging Face chat completion with timeout and automatic fallback.
+* Qwen3 requests use non-thinking mode to reduce latency and inference usage.
+* England postcode searches can retrieve dental-practice directory listings
+  from the NHS Service Search integration environment.
+* Per-client in-memory rate limiting and clearer timeout/API error messages.
 * Red urgent-response styling for safety-related messages.
 * Clickable source links shown below supported answers.
 * Small-sample response test table for recording answer quality and source gaps.
@@ -74,6 +83,7 @@ The prototype attaches source metadata to supported answers. The frontend render
 Current first-pass sources include:
 
 * NHS - Children's teeth
+* NHS - How to find an NHS dentist (England)
 * NHS - How to find an emergency or urgent NHS dentist appointment
 * NHS 111 Wales - Dental Helplines
 * Delivering better oral health PDF - local file, pages 9-11
@@ -89,7 +99,7 @@ Region-specific dental-service advice is intentionally conservative:
 
 * **Frontend:** React, TypeScript, Vite
 * **Backend:** Python, FastAPI, Uvicorn
-* **Current response method:** Rule-based safety routing with manually registered source links
+* **Current response method:** Safety rules + reviewed retrieval + optional Hugging Face LLM + fallback
 * **Testing:** pytest with FastAPI TestClient
 * **Version control:** Git and GitHub
 * **Target platform:** Mobile-friendly web application
@@ -100,6 +110,11 @@ Region-specific dental-service advice is intentionally conservative:
 oral-health-chatbot/
 |-- backend/
 |   |-- main.py
+|   |-- safety.py
+|   |-- knowledge.py
+|   |-- llm.py
+|   |-- rate_limit.py
+|   |-- schemas.py
 |   |-- requirements.txt
 |   |-- requirements-dev.txt
 |   `-- tests/
@@ -127,6 +142,31 @@ conda activate oral-health-chatbot
 
 ### 2. Start the backend
 
+Install the backend dependencies first:
+
+```cmd
+cd /d X:\oral-health-chatbot\backend
+pip install -r requirements-dev.txt
+```
+
+Copy `backend/.env.example` to `backend/.env`. To enable Hugging Face responses, set:
+
+```env
+HF_TOKEN=hf_your_token
+HF_MODEL=organisation/model-name
+HF_PROVIDER=auto
+LLM_TIMEOUT_SECONDS=12
+LLM_TEMPERATURE=0.2
+NHS_API_KEY=your_integration_api_key
+NHS_SERVICE_SEARCH_BASE_URL=https://int.api.service.nhs.uk/service-search-api/
+NHS_API_TIMEOUT_SECONDS=10
+RATE_LIMIT_REQUESTS=20
+RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+Leave `HF_TOKEN` and `HF_MODEL` empty to use the tested fallback only. Never commit the real `.env` file or expose the token in the React frontend.
+The same rule applies to `NHS_API_KEY`: keep it only in the backend environment.
+
 Open one terminal:
 
 ```cmd
@@ -153,6 +193,8 @@ cd frontend
 npm run dev
 ```
 
+For a deployed backend, copy `frontend/.env.example` to `frontend/.env` and replace `VITE_API_URL` with the public HTTPS API URL.
+
 Then open the local address shown in the terminal, usually:
 
 ```text
@@ -172,10 +214,10 @@ cd backend
 python -m pytest -q
 ```
 
-Expected result:
+Expected result at this stage:
 
 ```text
-12 passed
+15 passed
 ```
 
 The current tests verify:
@@ -244,9 +286,12 @@ Use it to record:
 * It is not an NHS service.
 * It does not currently use patient data, user accounts, or data storage.
 * It does not currently use an approved clinical dataset.
-* It does not yet use retrieval-augmented generation or a large language model.
-* The current rule-based responses cover only a small set of demonstration scenarios.
-* Source links are currently manually registered in the backend, not yet managed through a full source registry.
+* The local knowledge collection is intentionally small and must be clinically reviewed before expansion.
+* Hugging Face model quality depends on the configured model/provider and has not yet been clinically validated.
+* The NHS 111 Wales Dental Helplines reference is an external official webpage,
+  not a live API integration. Its URL and content must be checked regularly,
+  with the review date recorded when it is cited in the dissertation.
+* The in-memory rate limiter resets when the API restarts and should be replaced with a shared store before multi-instance deployment.
 * Scotland and Northern Ireland dental-service sources have not yet been added.
 
 ## Planned next steps
