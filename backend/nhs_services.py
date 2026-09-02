@@ -1,6 +1,7 @@
 import os
 import re
 from dataclasses import dataclass
+from urllib.parse import quote_plus
 
 import httpx
 
@@ -28,7 +29,7 @@ UK_POSTCODE_PATTERN = re.compile(
     r"\s?[0-9][ABD-HJLNP-UW-Z]{2}"
     r"|"
     r"(?:[A-PR-UWYZ][0-9][A-HJKSTUW]?|"
-    r"[A-PR-UWYZ][A-HK-Y][0-9ABEHMNPRV-Y]?)"
+            r"[A-PR-UWYZ][A-HK-Y][0-9][0-9ABEHMNPRV-Y]?)"
     r")\b",
     re.IGNORECASE,
 )
@@ -41,6 +42,13 @@ class DentalService:
     address: str
     postcode: str
     phone: str = ""
+
+    @property
+    def map_url(self) -> str:
+        query = ", ".join(
+            part for part in (self.name, self.address, self.postcode) if part
+        )
+        return f"https://www.google.com/maps/search/?api=1&query={quote_plus(query)}"
 
 
 class ServiceSearchError(RuntimeError):
@@ -57,6 +65,19 @@ def extract_uk_postcode(message: str) -> str | None:
     if not match:
         return None
     return re.sub(r"\s+", "", match.group(1)).upper()
+
+
+def format_uk_postcode(postcode: str) -> str:
+    compact = re.sub(r"\s+", "", postcode.upper())
+    if re.fullmatch(r".+[0-9][A-Z]{2}", compact):
+        return f"{compact[:-3]} {compact[-3:]}"
+    return compact
+
+
+def is_wales_postcode(postcode: str) -> bool:
+    """Identify postcode areas wholly or predominantly associated with Wales."""
+    compact = re.sub(r"\s+", "", postcode.upper())
+    return compact.startswith(("CF", "LD", "LL", "NP", "SA"))
 
 
 def _first_phone(contacts: object) -> str:
@@ -121,18 +142,14 @@ async def search_england_dentists(
     if not safe_postcode:
         return []
 
-    params = {
-        "api-version": "3",
-        "$filter": (
-            f"search.ismatch('{safe_postcode}', 'Postcode') "
-            "and OrganisationTypeId eq 'DEN'"
-        ),
-        "$top": str(max(1, min(limit, 10))),
-        "$select": (
-            "ODSCode,OrganisationName,Address1,Address2,Address3,"
-            "City,County,Postcode,Contacts,OrganisationTypeId"
-        ),
-    }
+    search_postcodes = [safe_postcode]
+    # A full postcode describes the parent's address, not necessarily a dental
+    # practice's address. If no exact-postcode listing exists, retry using the
+    # outward code (for example CW91AA -> CW9) to search the local district.
+    if re.fullmatch(r".+[0-9][A-Z]{2}", safe_postcode):
+        outward_code = safe_postcode[:-3]
+        if outward_code and outward_code != safe_postcode:
+            search_postcodes.append(outward_code)
     base_url = os.getenv(
         "NHS_SERVICE_SEARCH_BASE_URL",
         SERVICE_SEARCH_BASE_URL,
@@ -141,24 +158,38 @@ async def search_england_dentists(
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(
-                base_url,
-                params=params,
-                headers={"apikey": api_key},
-            )
-            response.raise_for_status()
+            for search_postcode in search_postcodes:
+                params = {
+                    "api-version": "3",
+                    "$filter": (
+                        f"search.ismatch('{search_postcode}', 'Postcode') "
+                        "and OrganisationTypeId eq 'DEN'"
+                    ),
+                    "$top": str(max(1, min(limit, 10))),
+                    "$select": (
+                        "ODSCode,OrganisationName,Address1,Address2,Address3,"
+                        "City,County,Postcode,Contacts,OrganisationTypeId"
+                    ),
+                }
+                response = await client.get(
+                    base_url,
+                    params=params,
+                    headers={"apikey": api_key},
+                )
+                response.raise_for_status()
+                data = response.json()
+                items = data.get("value", []) if isinstance(data, dict) else []
+                services = [
+                    service
+                    for item in items
+                    if isinstance(item, dict)
+                    and (service := _normalise_service(item)) is not None
+                ]
+                if services:
+                    return services[:limit]
     except (httpx.HTTPError, ValueError) as exc:
         raise ServiceSearchError("NHS Service Search is unavailable.") from exc
-
-    data = response.json()
-    items = data.get("value", []) if isinstance(data, dict) else []
-    services = [
-        service
-        for item in items
-        if isinstance(item, dict)
-        and (service := _normalise_service(item)) is not None
-    ]
-    return services[:limit]
+    return []
 
 
 def format_services_for_model(services: list[DentalService]) -> str:
@@ -198,7 +229,7 @@ def format_services_fallback(
         )
         contact = f" Tel: {service.phone}." if service.phone else ""
         lines.append(
-            f"- {service.name}"
+            f"\n- {service.name}"
             + (f" — {location}." if location else ".")
             + contact
         )

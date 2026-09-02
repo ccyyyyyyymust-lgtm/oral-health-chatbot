@@ -7,13 +7,58 @@ from schemas import AgeGroup, ConversationMessage, Region
 
 
 SYSTEM_PROMPT = """You are a children's oral-health information assistant for parents in the UK.
-Give clear general information, not a diagnosis. Ask one concise follow-up question when important
-details are missing. Use only the supplied reviewed evidence for clinical claims. Do not invent
-sources, medicine doses, or facts. Tell users that the service does not replace a dentist. If the
-evidence is insufficient, say so. The application has already handled explicit emergency wording.
-Reply in the language used by the parent where practical."""
+Give the useful answer immediately. Do not make the parent answer questions before giving safe,
+actionable advice. Use short, plain sentences and everyday words. Keep most answers under 120
+words. Do not repeat advice already given earlier in the conversation. If listing two or more
+items, put each item on its own line with a hyphen; never run list items together in one paragraph.
+Only ask a follow-up question when its answer could materially change the next advice. Ask no more
+than one concise question in a reply and no more than three assistant questions in the entire
+conversation. When the question allowance is exhausted, give the best safe answer and stop asking.
+Give general information, not a diagnosis. Use only the supplied reviewed evidence for clinical
+claims. Do not invent sources, medicine doses, availability, links, or facts. Tell users that the
+service does not replace a dentist. If evidence is insufficient, say so. The application has
+already handled explicit emergency wording. Reply in the language used by the parent where
+practical."""
 
 logger = logging.getLogger(__name__)
+
+MAX_ASSISTANT_QUESTIONS = 3
+
+
+def _assistant_question_count(messages: list[ConversationMessage]) -> int:
+    return min(
+        MAX_ASSISTANT_QUESTIONS,
+        sum(
+            item.content.count("?") + item.content.count("？")
+            for item in messages
+            if item.role == "assistant"
+        ),
+    )
+
+
+def _limit_questions(text: str, allowance: int) -> str:
+    """Keep direct advice while enforcing the remaining question allowance."""
+    kept: list[str] = []
+    segment: list[str] = []
+    questions_kept = 0
+
+    for character in text:
+        segment.append(character)
+        if character not in ".!?。！？\n":
+            continue
+        sentence = "".join(segment)
+        segment = []
+        is_question = character in "?？"
+        if is_question and questions_kept >= allowance:
+            continue
+        if is_question:
+            questions_kept += 1
+        kept.append(sentence)
+
+    remainder = "".join(segment)
+    if remainder.strip():
+        kept.append(remainder)
+    return "".join(kept).strip()
 
 
 def llm_is_configured() -> bool:
@@ -56,6 +101,8 @@ def _completion_sync(
     )
     context = (
         f"Parent context: region={region}; child age group={age_group}.\n"
+        f"Assistant questions already asked in this conversation: "
+        f"{_assistant_question_count(messages)} of {MAX_ASSISTANT_QUESTIONS}.\n"
         f"Reviewed evidence:\n{evidence_text}"
         f"{extra_context}"
     )
@@ -77,13 +124,17 @@ def _completion_sync(
     result = client.chat_completion(
         model=os.environ["HF_MODEL"],
         messages=chat_messages,
-        max_tokens=400,
+        max_tokens=240,
         temperature=float(os.getenv("LLM_TEMPERATURE", "0.2")),
     )
     content = result.choices[0].message.content
     if not content:
         raise RuntimeError("The configured model returned an empty response.")
-    return content.strip()
+    remaining_questions = max(
+        0,
+        MAX_ASSISTANT_QUESTIONS - _assistant_question_count(messages),
+    )
+    return _limit_questions(content.strip(), min(1, remaining_questions))
 
 
 async def generate_reply(

@@ -50,6 +50,14 @@ class SourceLink(BaseModel):
     url: str
 
 
+class DentalServiceResult(BaseModel):
+    name: str
+    address: str = ""
+    postcode: str = ""
+    phone: str = ""
+    map_url: str
+
+
 class ChatResponse(BaseModel):
     reply: str
     category: Category
@@ -59,5 +67,6 @@ class ChatResponse(BaseModel):
     needs_age_group: bool = False
     source_gap: bool = False
     sources: list[SourceLink] = Field(default_factory=list)
+    dental_services: list[DentalServiceResult] = Field(default_factory=list)
+    copyable_postcode: str | None = None
     response_mode: Literal["safety", "llm", "fallback"] = "fallback"
-

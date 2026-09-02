@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from knowledge import (
     DBOH_GUIDANCE,
     NHS_CHILDRENS_TEETH,
+    NHS_111_WALES,
     NHS_URGENT_DENTIST,
     retrieve_knowledge,
     unique_sources,
@@ -15,14 +16,23 @@ from llm import generate_reply
 from nhs_services import (
     ServiceSearchError,
     extract_uk_postcode,
+    format_uk_postcode,
     format_services_fallback,
     format_services_for_model,
     is_dentist_search_query,
+    is_wales_postcode,
     search_england_dentists,
 )
 from rate_limit import rate_limiter
 from safety import check_safety, contains_any
-from schemas import AgeGroup, ChatRequest, ChatResponse, Region, SourceLink
+from schemas import (
+    AgeGroup,
+    ChatRequest,
+    ChatResponse,
+    DentalServiceResult,
+    Region,
+    SourceLink,
+)
 
 
 load_dotenv()
@@ -40,6 +50,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"^http://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,6 +70,23 @@ AGE_SENSITIVE_BRUSHING_TERMS = (
     "牙刷",
     "牙膏",
     "含氟",
+)
+
+TOOTHACHE_TERMS = (
+    "toothache",
+    "teethache",
+    "teeth ache",
+    "tooth pain",
+    "teeth pain",
+    "tooth hurts",
+    "painful tooth",
+    "uncomfortable",
+    "sore tooth",
+    "sensitive tooth",
+    "牙痛",
+    "牙疼",
+    "牙齿不舒服",
+    "牙齿疼",
 )
 
 
@@ -100,6 +128,8 @@ def build_response(
     needs_age_group: bool = False,
     source_gap: bool = False,
     response_mode: str = "fallback",
+    dental_services: list[DentalServiceResult] | None = None,
+    copyable_postcode: str | None = None,
 ) -> ChatResponse:
     return ChatResponse(
         reply=reply,
@@ -111,16 +141,14 @@ def build_response(
         needs_age_group=needs_age_group,
         source_gap=source_gap,
         response_mode=response_mode,  # type: ignore[arg-type]
+        dental_services=dental_services or [],
+        copyable_postcode=copyable_postcode,
     )
 
 
 def fallback_response(message: str, region: Region, age_group: AgeGroup) -> ChatResponse:
     question = message.casefold()
     brushing_terms = ["brush", "toothbrush", "toothpaste", "fluoride", "刷牙", "牙刷", "牙膏", "含氟"]
-    toothache_terms = [
-        "toothache", "tooth pain", "tooth hurts", "painful tooth", "uncomfortable",
-        "sore tooth", "sensitive tooth", "牙痛", "牙疼", "牙齿不舒服", "牙齿疼",
-    ]
     generic_urgent_terms = ["urgent dental", "emergency dental", "emergency dentist", "urgent care"]
 
     if contains_any(question, generic_urgent_terms):
@@ -167,7 +195,7 @@ def fallback_response(message: str, region: Region, age_group: AgeGroup) -> Chat
             sources=[NHS_CHILDRENS_TEETH, DBOH_GUIDANCE],
         )
 
-    if contains_any(question, toothache_terms):
+    if contains_any(question, TOOTHACHE_TERMS):
         return build_response(
             reply=(
                 "I understand that your child's tooth feels uncomfortable. Tooth or mouth pain "
@@ -276,11 +304,42 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             sources=[NHS_CHILDRENS_TEETH, DBOH_GUIDANCE],
         )
 
-    if is_dentist_search_query(message):
-        if payload.region != "England":
+    postcode = extract_uk_postcode(message)
+    postcode_follows_dentist_request = bool(
+        postcode
+        and any(
+            item.role == "user" and is_dentist_search_query(item.content)
+            for item in payload.messages[:-1]
+        )
+    )
+    if is_dentist_search_query(message) or postcode_follows_dentist_request:
+        if postcode and (payload.region == "Wales" or is_wales_postcode(postcode)):
+            display_postcode = format_uk_postcode(postcode)
+            return build_response(
+                reply=(
+                    "I do not currently have a live Wales dentist-directory connection, "
+                    "so I cannot reliably list nearby practices. Copy the postcode below "
+                    "and paste it into NHS 111 Wales Dental Services or your preferred "
+                    "map or search app."
+                ),
+                category="general",
+                urgent=False,
+                region="Wales",
+                age_group=age_group,
+                sources=[NHS_111_WALES],
+                source_gap=True,
+                copyable_postcode=display_postcode,
+            )
+
+        if payload.region not in ("England", "Not sure"):
             return fallback_response(message, payload.region, age_group)
 
-        postcode = extract_uk_postcode(message)
+        # A parent may reasonably leave the location selector at its default
+        # while supplying an England postcode in the question. In that case,
+        # use the England NHS directory instead of bypassing service search.
+        service_region: Region = (
+            "England" if payload.region == "Not sure" and postcode else payload.region
+        )
         if not postcode:
             return build_response(
                 reply=(
@@ -289,7 +348,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 ),
                 category="general",
                 urgent=False,
-                region=payload.region,
+                region=service_region,
                 age_group=age_group,
                 sources=[NHS_DENTIST_DIRECTORY],
             )
@@ -300,48 +359,83 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             return build_response(
                 reply=(
                     "The NHS dental-practice directory is temporarily unavailable. "
-                    "You can use the official NHS Find a dentist service directly "
-                    "and search with your postcode."
+                    "You can still copy your postcode or open a map search below. "
+                    "You can also use the official NHS Find a dentist service directly."
                 ),
                 category="general",
                 urgent=False,
-                region=payload.region,
+                region=service_region,
                 age_group=age_group,
                 sources=[NHS_DENTIST_DIRECTORY],
                 source_gap=True,
+                copyable_postcode=format_uk_postcode(postcode),
             )
 
         if not services:
             return build_response(
                 reply=(
                     f"I could not find a dental-practice listing for {postcode} "
-                    "in the NHS directory. Try the full postcode or use the "
-                    "official NHS Find a dentist service."
+                    "in the NHS directory. You can still copy your postcode or "
+                    "open a map search below, or use the official NHS Find a "
+                    "dentist service."
                 ),
                 category="general",
                 urgent=False,
-                region=payload.region,
+                region=service_region,
                 age_group=age_group,
                 sources=[NHS_DENTIST_DIRECTORY],
                 source_gap=True,
+                copyable_postcode=format_uk_postcode(postcode),
             )
 
         service_context = format_services_for_model(services)
+        has_toothache = contains_any(message, TOOTHACHE_TERMS)
+        clinical_evidence = (
+            retrieve_knowledge(message, age_group, service_region)
+            if has_toothache
+            else []
+        )
         llm_reply = await generate_reply(
             payload.conversation(),
-            [],
-            payload.region,
+            clinical_evidence,
+            service_region,
             age_group,
             additional_evidence=service_context,
         )
+        fallback_reply = format_services_fallback(postcode, services)
+        if has_toothache:
+            fallback_reply += (
+                "\n\nFor your child's toothache: arrange a dental assessment. "
+                "Contact a dentist or NHS 111 if the pain is severe, affects sleep "
+                "or daily activities, or does not go away, or if swelling is getting "
+                "bigger. Call 999 or go to A&E if swelling affects breathing or "
+                "swallowing, there is heavy bleeding that will not stop, or there is "
+                "a serious face or jaw injury."
+            )
+            if age_group == "Not provided":
+                fallback_reply += (
+                    "\n\nPlease choose the child's age group (0-3, 3-6, or 7+) "
+                    "so any follow-up guidance can be age appropriate."
+                )
         return build_response(
-            reply=llm_reply or format_services_fallback(postcode, services),
-            category="general",
+            reply=llm_reply or fallback_reply,
+            category="toothache" if has_toothache else "general",
             urgent=False,
-            region=payload.region,
+            region=service_region,
             age_group=age_group,
-            sources=[NHS_DENTIST_DIRECTORY],
+            sources=[NHS_DENTIST_DIRECTORY, *unique_sources(clinical_evidence)],
+            needs_age_group=has_toothache and age_group == "Not provided",
             response_mode="llm" if llm_reply else "fallback",
+            dental_services=[
+                DentalServiceResult(
+                    name=service.name,
+                    address=service.address,
+                    postcode=service.postcode,
+                    phone=service.phone,
+                    map_url=service.map_url,
+                )
+                for service in services
+            ],
         )
 
     evidence = retrieve_knowledge(message, age_group, payload.region)

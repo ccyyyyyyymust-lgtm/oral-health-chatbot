@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 import main
 from main import app
-from nhs_services import DentalService
+from nhs_services import DentalService, ServiceSearchError
 from rate_limit import InMemoryRateLimiter
 
 
@@ -14,6 +14,7 @@ client = TestClient(app)
 def disable_real_llm(monkeypatch):
     # Unit/API tests must never consume the developer's hosted inference credits.
     monkeypatch.setenv("HF_TOKEN", "")
+    main.rate_limiter._requests.clear()
 
 
 def send_message(
@@ -33,6 +34,28 @@ def test_health_check():
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:5174",
+        "http://127.0.0.1:5175",
+        "http://[::1]:5176",
+    ],
+)
+def test_local_vite_ports_are_allowed_by_cors(origin):
+    response = client.options(
+        "/api/chat",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
 
 
 def test_brushing_question_asks_for_age_group_when_missing():
@@ -125,6 +148,67 @@ def test_find_nhs_dentist_question_asks_for_postcode():
     assert any("service-search/find-a-dentist" in source["url"] for source in data["sources"])
 
 
+def test_wales_postcode_offers_copy_instead_of_england_directory(monkeypatch):
+    async def unexpected_search(*args, **kwargs):
+        raise AssertionError("A Wales postcode must not use the England directory.")
+
+    monkeypatch.setattr(main, "search_england_dentists", unexpected_search)
+    data = send_message("Find a dentist near CF10 3UP", region="England")
+
+    assert data["region"] == "Wales"
+    assert data["copyable_postcode"] == "CF10 3UP"
+    assert data["dental_services"] == []
+    assert data["source_gap"] is True
+    assert "do not currently have" in data["reply"].lower()
+    assert any("111.wales.nhs.uk" in source["url"] for source in data["sources"])
+
+
+def test_wales_postcode_only_followup_offers_copy(monkeypatch):
+    async def unexpected_search(*args, **kwargs):
+        raise AssertionError("A Wales postcode must not use the England directory.")
+
+    monkeypatch.setattr(main, "search_england_dentists", unexpected_search)
+    response = client.post(
+        "/api/chat",
+        json={
+            "messages": [
+                {"role": "user", "content": "Find a dentist near me"},
+                {"role": "assistant", "content": "Please provide your postcode."},
+                {"role": "user", "content": "CF10 3UP"},
+            ],
+            "region": "Not sure",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["copyable_postcode"] == "CF10 3UP"
+
+
+def test_england_directory_failure_preserves_postcode_actions(monkeypatch):
+    async def failed_search(*args, **kwargs):
+        raise ServiceSearchError("Temporary upstream failure")
+
+    monkeypatch.setattr(main, "search_england_dentists", failed_search)
+    data = send_message("Find a dentist near CW9 1AA", region="England")
+
+    assert data["source_gap"] is True
+    assert data["copyable_postcode"] == "CW9 1AA"
+    assert data["dental_services"] == []
+    assert "open a map search" in data["reply"].lower()
+
+
+def test_empty_england_directory_result_preserves_postcode_actions(monkeypatch):
+    async def empty_search(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(main, "search_england_dentists", empty_search)
+    data = send_message("Find a dentist near CW9 1AA", region="England")
+
+    assert data["source_gap"] is True
+    assert data["copyable_postcode"] == "CW9 1AA"
+    assert "open a map search" in data["reply"].lower()
+
+
 def test_find_nhs_dentist_uses_service_search_results(monkeypatch):
     async def fake_search(postcode: str, *, limit: int = 5):
         assert postcode == "CW9"
@@ -145,6 +229,90 @@ def test_find_nhs_dentist_uses_service_search_results(monkeypatch):
     assert "Example Dental Practice" in data["reply"]
     assert "accepting NHS patients" in data["reply"]
     assert data["sources"][0]["url"].endswith("/find-a-dentist")
+    assert data["dental_services"][0]["postcode"] == "CW9 1AA"
+    assert data["dental_services"][0]["map_url"].startswith("https://www.google.com/maps/")
+
+
+def test_combined_dentist_search_and_toothache_answers_both_needs(monkeypatch):
+    async def fake_search(postcode: str, *, limit: int = 5):
+        assert postcode == "CW9"
+        return [
+            DentalService(
+                ods_code="ABC01",
+                name="Northwich Child Dental Practice",
+                address="1 Example Street, Northwich",
+                postcode="CW9 1AA",
+                phone="01632 960000",
+            )
+        ]
+
+    monkeypatch.setattr(main, "search_england_dentists", fake_search)
+    data = send_message(
+        "Where is a dentist near CW9 and what should I do about my child's toothache?",
+        region="England",
+    )
+
+    assert data["category"] == "toothache"
+    assert data["needs_age_group"] is True
+    assert "Northwich Child Dental Practice" in data["reply"]
+    assert "toothache" in data["reply"].lower()
+    assert "NHS 111" in data["reply"]
+    assert "age group" in data["reply"].lower()
+    source_urls = {source["url"] for source in data["sources"]}
+    assert any(url.endswith("/find-a-dentist") for url in source_urls)
+    assert any("in-an-emergency" in url for url in source_urls)
+
+
+def test_combined_dentist_search_with_age_does_not_repeat_age_request(monkeypatch):
+    async def fake_search(postcode: str, *, limit: int = 5):
+        return [
+            DentalService(
+                ods_code="ABC01",
+                name="Northwich Child Dental Practice",
+                address="1 Example Street, Northwich",
+                postcode="CW9 1AA",
+            )
+        ]
+
+    monkeypatch.setattr(main, "search_england_dentists", fake_search)
+    data = send_message(
+        "Find a dentist near CW9. My child has toothache.",
+        region="England",
+        age_group="3-6",
+    )
+
+    assert data["category"] == "toothache"
+    assert data["needs_age_group"] is False
+    assert "Northwich Child Dental Practice" in data["reply"]
+    assert "Please choose" not in data["reply"]
+
+
+def test_postcode_search_infers_england_when_location_is_not_sure(monkeypatch):
+    async def fake_search(postcode: str, *, limit: int = 5):
+        assert postcode == "CW91AA"
+        return [
+            DentalService(
+                ods_code="ABC01",
+                name="Northwich Dental Practice",
+                address="1 Example Street, Northwich",
+                postcode="CW9 1AA",
+                phone="01632 960000",
+            )
+        ]
+
+    monkeypatch.setattr(main, "search_england_dentists", fake_search)
+    data = send_message(
+        "my child have a teethache, we live near by cw9 1aa. How can we find a dentist",
+        region="Not sure",
+        age_group="7+",
+    )
+
+    assert data["region"] == "England"
+    assert data["category"] == "toothache"
+    assert "Northwich Dental Practice" in data["reply"]
+    assert "01632 960000" in data["reply"]
+    assert "NHS 111" in data["reply"]
+    assert any(source["url"].endswith("/find-a-dentist") for source in data["sources"])
 
 
 def test_find_nhs_dentist_source_is_not_used_outside_england():

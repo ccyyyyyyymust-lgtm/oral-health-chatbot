@@ -36,6 +36,18 @@ DBOH_GUIDANCE = SourceLink(
         "delivering-better-oral-health-an-evidence-based-toolkit-for-prevention"
     ),
 )
+IADT_FRACTURES_LUXATIONS = SourceLink(
+    title="IADT 2020 - Fractures and luxations",
+    url="https://doi.org/10.1111/edt.12578",
+)
+IADT_AVULSION = SourceLink(
+    title="IADT 2020 - Avulsion of permanent teeth",
+    url="https://doi.org/10.1111/edt.12573",
+)
+IADT_PRIMARY_DENTITION = SourceLink(
+    title="IADT 2020 - Injuries in the primary dentition",
+    url="https://doi.org/10.1111/edt.12576",
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +63,47 @@ class KnowledgeEntry:
 # These short, reviewed summaries are based on NHS pages and DBOH PDF pages
 # 9-11. They are intentionally stored locally so retrieval is deterministic.
 ENTRIES = (
+    KnowledgeEntry(
+        entry_id="trauma-knocked-out-permanent-tooth",
+        text=(
+            "A knocked-out permanent tooth needs immediate dental care. Hold it by the crown, "
+            "not the root. If it is dirty, rinse it gently. Replant it immediately if possible. "
+            "If that is not possible, keep it moist in milk or another suitable storage medium "
+            "and go to a dentist at once. Do not replant a baby tooth."
+        ),
+        keywords=(
+            "knocked out tooth", "knocked-out tooth", "avulsion", "avulsed", "tooth fell out",
+            "dental injury", "dental trauma", "撞掉", "牙齿脱落", "牙外伤",
+        ),
+        source=IADT_AVULSION,
+    ),
+    KnowledgeEntry(
+        entry_id="trauma-primary-tooth",
+        text=(
+            "Do not put a knocked-out baby tooth back into the socket. Arrange prompt dental "
+            "assessment. The dentist will check the injury and whether the developing permanent "
+            "tooth may be affected."
+        ),
+        keywords=(
+            "baby tooth knocked out", "primary tooth", "deciduous tooth", "milk tooth",
+            "baby tooth injury", "乳牙", "乳牙外伤",
+        ),
+        source=IADT_PRIMARY_DENTITION,
+        age_groups=("0-3", "3-6"),
+    ),
+    KnowledgeEntry(
+        entry_id="trauma-fracture-luxation",
+        text=(
+            "A broken, displaced, or loose tooth after an injury should be assessed promptly by "
+            "a dentist. Treatment and follow-up depend on the tooth, the injury, root development, "
+            "and whether supporting tissues are involved."
+        ),
+        keywords=(
+            "broken tooth", "chipped tooth", "cracked tooth", "loose tooth", "pushed tooth",
+            "displaced tooth", "luxation", "fracture", "dental trauma", "牙齿断了", "牙外伤",
+        ),
+        source=IADT_FRACTURES_LUXATIONS,
+    ),
     KnowledgeEntry(
         entry_id="england-find-nhs-dentist",
         text=(
@@ -123,7 +176,8 @@ ENTRIES = (
             "swelling that is getting bigger or not going away."
         ),
         keywords=(
-            "toothache", "tooth pain", "mouth pain", "hurts", "uncomfortable",
+            "toothache", "teethache", "teeth ache", "tooth pain", "teeth pain",
+            "mouth pain", "hurts", "uncomfortable",
             "sore", "sensitive", "swelling", "painful", "不舒服", "牙痛", "疼",
         ),
         source=NHS_URGENT_DENTIST,

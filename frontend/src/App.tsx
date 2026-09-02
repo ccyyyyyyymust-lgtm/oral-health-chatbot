@@ -8,11 +8,23 @@ type Message = {
   text: string
   urgent?: boolean
   sources?: SourceLink[]
+  needsAgeGroup?: boolean
+  pendingQuestion?: string
+  dentalServices?: DentalService[]
+  copyablePostcode?: string
 }
 
 type SourceLink = {
   title: string
   url: string
+}
+
+type DentalService = {
+  name: string
+  address: string
+  postcode: string
+  phone: string
+  map_url: string
 }
 
 type ChatApiResponse = {
@@ -25,6 +37,8 @@ type ChatApiResponse = {
   source_gap: boolean
   sources: SourceLink[]
   response_mode: 'safety' | 'llm' | 'fallback'
+  dental_services: DentalService[]
+  copyable_postcode: string | null
 }
 
 type QuickQuestion = {
@@ -46,8 +60,6 @@ type AgeGroup = 'Not provided' | '0-3' | '3-6' | '7+'
 const regions: Region[] = [
   'England',
   'Wales',
-  'Scotland',
-  'Northern Ireland',
   'Not sure',
 ]
 
@@ -86,6 +98,23 @@ const welcomeMessage: Message = {
   ),
 }
 
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const input = document.createElement('textarea')
+  input.value = text
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.appendChild(input)
+  input.select()
+  document.execCommand('copy')
+  input.remove()
+}
+
 function App() {
   const [messages, setMessages] = useState<Message[]>([welcomeMessage])
   const [input, setInput] = useState('')
@@ -94,12 +123,23 @@ function App() {
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
 
-  const sendMessage = async (question: string) => {
+  const sendMessage = async (
+    question: string,
+    options: {
+      ageOverride?: AgeGroup
+      showUserMessage?: boolean
+      replaceAgePrompt?: boolean
+    } = {},
+  ) => {
     const trimmedQuestion = question.trim()
     if (!trimmedQuestion || isSending) return
 
     const userMessage: Message = { role: 'user', text: trimmedQuestion }
-    const updatedMessages = [...messages, userMessage]
+    const originalMessages = messages
+    const baseMessages = options.replaceAgePrompt ? messages.slice(0, -1) : messages
+    const updatedMessages = options.showUserMessage === false
+      ? baseMessages
+      : [...baseMessages, userMessage]
     setMessages(updatedMessages)
     setInput('')
     setError('')
@@ -123,7 +163,7 @@ function App() {
         body: JSON.stringify({
           messages: conversation,
           region,
-          age_group: ageGroup,
+          age_group: options.ageOverride ?? ageGroup,
         }),
         signal: controller.signal,
       })
@@ -144,9 +184,16 @@ function App() {
           text: data.reply,
           urgent: data.urgent,
           sources: data.sources,
+          needsAgeGroup: data.needs_age_group,
+          pendingQuestion: data.needs_age_group ? trimmedQuestion : undefined,
+          dentalServices: data.dental_services,
+          copyablePostcode: data.copyable_postcode ?? undefined,
         },
       ])
     } catch (requestError) {
+      if (options.replaceAgePrompt) {
+        setMessages(originalMessages)
+      }
       if (requestError instanceof DOMException && requestError.name === 'AbortError') {
         setError('The response took too long. Please check your connection and try again.')
       } else if (requestError instanceof Error) {
@@ -158,6 +205,16 @@ function App() {
       window.clearTimeout(timeoutId)
       setIsSending(false)
     }
+  }
+
+  const selectAgeAndRetry = (selectedAge: Exclude<AgeGroup, 'Not provided'>, question: string) => {
+    if (isSending) return
+    setAgeGroup(selectedAge)
+    void sendMessage(question, {
+      ageOverride: selectedAge,
+      showUserMessage: false,
+      replaceAgePrompt: true,
+    })
   }
 
   return (
@@ -187,22 +244,44 @@ function App() {
           </div>
         </section>
 
+        {(region === 'Not sure' || ageGroup === 'Not provided') && (
+          <aside className="context-reminder" role="note" aria-label="Before asking">
+            <strong>Before asking</strong>
+            <span>
+              Please select your location and your child’s age. This helps us
+              provide more relevant guidance.
+            </span>
+          </aside>
+        )}
+
         <section className="context-section" aria-label="Parent context">
-          <label>
+          <label className={region === 'Not sure' ? 'needs-attention' : ''}>
             <span>Location</span>
-            <select value={region} onChange={(event) => setRegion(event.target.value as Region)} disabled={isSending}>
+            <select
+              value={region}
+              onChange={(event) => setRegion(event.target.value as Region)}
+              disabled={isSending}
+              aria-describedby={region === 'Not sure' ? 'location-selection-hint' : undefined}
+            >
               {regions.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
+            {region === 'Not sure' && <small id="location-selection-hint">Please select</small>}
           </label>
-          <label>
+          <label className={ageGroup === 'Not provided' ? 'needs-attention' : ''}>
             <span>Child age</span>
-            <select value={ageGroup} onChange={(event) => setAgeGroup(event.target.value as AgeGroup)} disabled={isSending}>
+            <select
+              value={ageGroup}
+              onChange={(event) => setAgeGroup(event.target.value as AgeGroup)}
+              disabled={isSending}
+              aria-describedby={ageGroup === 'Not provided' ? 'age-selection-hint' : undefined}
+            >
               {ageGroups.map((item) => (
                 <option key={item} value={item}>
                   {item === 'Not provided' ? 'Not provided yet' : item}
                 </option>
               ))}
             </select>
+            {ageGroup === 'Not provided' && <small id="age-selection-hint">Please select</small>}
           </label>
         </section>
 
@@ -230,6 +309,60 @@ function App() {
             <article key={index} className={`message ${message.role} ${message.urgent ? 'urgent' : ''}`}>
               {message.urgent && <span className="message-label">Urgent pathway</span>}
               <p>{message.text}</p>
+              {message.copyablePostcode && (
+                <div className="postcode-copy-card" aria-label="Postcode to copy">
+                  <strong>{message.copyablePostcode}</strong>
+                  <div className="postcode-actions">
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`dentist near ${message.copyablePostcode}`)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open in maps
+                    </a>
+                    <button type="button" onClick={() => void copyText(message.copyablePostcode!)}>
+                      Copy postcode
+                    </button>
+                  </div>
+                </div>
+              )}
+              {message.dentalServices && message.dentalServices.length > 0 && (
+                <div className="dental-service-list" aria-label="Dental practices">
+                  {message.dentalServices.map((service) => (
+                    <section className="dental-service" key={`${service.name}-${service.postcode}`}>
+                      <strong>{service.name}</strong>
+                      {service.address && <span>{service.address}</span>}
+                      {service.postcode && <span>{service.postcode}</span>}
+                      {service.phone && <a href={`tel:${service.phone}`}>{service.phone}</a>}
+                      <div className="service-actions">
+                        <a href={service.map_url} target="_blank" rel="noreferrer">Open in maps</a>
+                        {service.postcode && (
+                          <button
+                            type="button"
+                            onClick={() => void copyText(service.postcode)}
+                          >
+                            Copy postcode
+                          </button>
+                        )}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              )}
+              {message.needsAgeGroup && message.pendingQuestion && (
+                <div className="age-choice-group" aria-label="Choose the child's age group">
+                  {(['0-3', '3-6', '7+'] as const).map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => selectAgeAndRetry(item, message.pendingQuestion!)}
+                      disabled={isSending}
+                    >
+                      {item === '0-3' ? '0–3 years' : item === '3-6' ? '3–6 years' : '7+ years'}
+                    </button>
+                  ))}
+                </div>
+              )}
               {message.sources && message.sources.length > 0 && (
                 <div className="source-links" aria-label="Sources">
                   <span>Reviewed sources</span>
