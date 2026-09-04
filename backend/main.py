@@ -21,6 +21,7 @@ from nhs_services import (
     format_services_for_model,
     is_dentist_search_query,
     is_wales_postcode,
+    search_wales_dentists_offline,
     search_england_dentists,
 )
 from rate_limit import rate_limiter
@@ -315,20 +316,31 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     if is_dentist_search_query(message) or postcode_follows_dentist_request:
         if postcode and (payload.region == "Wales" or is_wales_postcode(postcode)):
             display_postcode = format_uk_postcode(postcode)
+            services = search_wales_dentists_offline(postcode)
             return build_response(
                 reply=(
-                    "I do not currently have a live Wales dentist-directory connection, "
-                    "so I cannot reliably list nearby practices. Copy the postcode below "
-                    "and paste it into NHS 111 Wales Dental Services or your preferred "
-                    "map or search app."
+                    f"I found {len(services)} nearby options from the offline NHS 111 "
+                    "Wales directory snapshot. These are directory listings, not live "
+                    "availability: call the practice to confirm that it can see your "
+                    "child and whether it is accepting NHS patients."
                 ),
                 category="general",
                 urgent=False,
                 region="Wales",
                 age_group=age_group,
                 sources=[NHS_111_WALES],
-                source_gap=True,
+                source_gap=False,
                 copyable_postcode=display_postcode,
+                dental_services=[
+                    DentalServiceResult(
+                        name=service.name,
+                        address=service.address,
+                        postcode=service.postcode,
+                        phone=service.phone,
+                        map_url=service.map_url,
+                    )
+                    for service in services
+                ],
             )
 
         if payload.region not in ("England", "Not sure"):

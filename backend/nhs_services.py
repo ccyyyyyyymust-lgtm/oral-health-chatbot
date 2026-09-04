@@ -80,6 +80,71 @@ def is_wales_postcode(postcode: str) -> bool:
     return compact.startswith(("CF", "LD", "LL", "NP", "SA"))
 
 
+# Offline snapshot of directory records published by NHS 111 Wales.  Keeping a
+# small, geographically spread snapshot here means Wales searches still return
+# useful practice cards when no live directory API is available.  The records
+# are listings only; callers must not imply that a practice is accepting NHS
+# patients or currently has appointments.
+WALES_DENTAL_SERVICES: tuple[DentalService, ...] = (
+    DentalService("", "Charles Street Dental Surgery", "54 Charles Street, City Centre, Cardiff", "CF10 2GF", "02920 230185"),
+    DentalService("", "Park Place Dental Practice", "3-4 Park Place, Cardiff", "CF10 3DP", "02920 373831"),
+    DentalService("", "Hywel Samuel & Associates - Golate Dental Practice", "Golate Court, Golate Street, Cardiff", "CF10 1EU", "02920 371393"),
+    DentalService("", "Gentle Dental Surgery", "7 Victoria Square, Aberdare", "CF44 7LA", "01685 882800"),
+    DentalService("", "Park Crescent Dental Practice", "29 Park Crescent, Barry", "CF62 6HE", "01446 733595"),
+    DentalService("", "Little Owl Dental", "The Old Town Hall, Temple Street, Llandrindod Wells", "LD1 5DL", "01597 822404"),
+    DentalService("", "Brecon Dental Care", "12 Castle Street, Brecon", "LD3 9BU", "01874 623357"),
+    DentalService("", "Brecon Road Dental Surgery", "34 Brecon Road, Abergavenny", "NP7 5UG", "01873 856111"),
+    DentalService("", "The Gateway Dental Practice", "44 Cross Street, Abergavenny", "NP7 5ER", "01873 737737"),
+    DentalService("", "Malpas Road Dental Surgery", "48 Malpas Road, Newport", "NP20 5PB", "01633 857351"),
+    DentalService("", "Malpas Dental Practice", "442 Malpas Road, Newport", "NP20 6WE", "01633 853866"),
+    DentalService("", "Bettws Dental Surgery", "1 Bettws Shopping Centre, Newport", "NP20 7TN", "01633 821388"),
+    DentalService("", "Belgrave Dental Centre", "91 Walter Road, Swansea", "SA1 4QF", "01792 473881"),
+    DentalService("", "Brynteg Dental Practice", "26 Dilwyn Road, Sketty, Swansea", "SA2 9AE", "01792 204995"),
+    DentalService("", "Chapel Street Dental Practice", "15 Chapel Street, Mumbles, Swansea", "SA3 4NH", "01792 368388"),
+    DentalService("", "Bridge Street Dental Practice", "21-23 Bridge Street, Haverfordwest", "SA61 2AL", "01437 766958"),
+    DentalService("", "Dew Street Dental Practice", "31 Dew Street, Haverfordwest", "SA61 1ST", "01437 762709"),
+    DentalService("", "My Dentist, Quay Street", "Quay Street, Haverfordwest", "SA61 1BB", "01437 769816"),
+    DentalService("", "Castlewood Dental Care", "Haulfryn, Lenton Pool, Denbigh", "LL16 3LH", "01745 817237"),
+    DentalService("", "The Hollies Dental Practice", "65 Vale Street, Denbigh", "LL16 3AP", "01745 813198"),
+    DentalService("", "Corwen Health Centre", "Green Lane, Corwen", "LL21 0DN", "03000 859377"),
+    DentalService("", "Elwy Dental Practice", "1 Chapel Street, Abergele", "LL22 7AW", "01745 826885"),
+    DentalService("", "Llanrwst Dental Practice", "24a Watling Street, Llanrwst", "LL26 0LS", "01492 641000"),
+    DentalService("", "Clifton Dental Practice", "67 Clifton Terrace, Newtown", "SY16 1BG", "01686 626252"),
+    DentalService("", "My Dentist, New Road", "New Road, Newtown", "SY16 1BD", "01686 248031"),
+    DentalService("", "My Dentist, Troseley House", "67 Clifton Terrace, Newtown", "SY16 1BG", "01686 624344"),
+)
+
+
+def _postcode_area_and_district(postcode: str) -> tuple[str, int]:
+    compact = re.sub(r"\s+", "", postcode.upper())
+    match = re.match(r"([A-Z]{1,2})(\d{1,2})", compact)
+    return (match.group(1), int(match.group(2))) if match else ("", 999)
+
+
+def search_wales_dentists_offline(
+    postcode: str,
+    *,
+    limit: int = 5,
+) -> list[DentalService]:
+    """Return the nearest available Wales snapshot records without networking.
+
+    The outward postcode district is used as a deterministic geographic proxy:
+    same-area records rank first, then neighbouring Wales records.  It is not a
+    distance calculation, so the UI describes these as offline directory results.
+    """
+    area, district = _postcode_area_and_district(postcode)
+
+    def rank(service: DentalService) -> tuple[int, int, str]:
+        service_area, service_district = _postcode_area_and_district(service.postcode)
+        return (
+            0 if service_area == area else 1,
+            abs(service_district - district) if service_area == area else 999,
+            service.name,
+        )
+
+    return sorted(WALES_DENTAL_SERVICES, key=rank)[:max(3, min(limit, 5))]
+
+
 def _first_phone(contacts: object) -> str:
     if not isinstance(contacts, list):
         return ""

@@ -148,7 +148,7 @@ def test_find_nhs_dentist_question_asks_for_postcode():
     assert any("service-search/find-a-dentist" in source["url"] for source in data["sources"])
 
 
-def test_wales_postcode_offers_copy_instead_of_england_directory(monkeypatch):
+def test_wales_postcode_uses_offline_directory_instead_of_england_api(monkeypatch):
     async def unexpected_search(*args, **kwargs):
         raise AssertionError("A Wales postcode must not use the England directory.")
 
@@ -157,9 +157,11 @@ def test_wales_postcode_offers_copy_instead_of_england_directory(monkeypatch):
 
     assert data["region"] == "Wales"
     assert data["copyable_postcode"] == "CF10 3UP"
-    assert data["dental_services"] == []
-    assert data["source_gap"] is True
-    assert "do not currently have" in data["reply"].lower()
+    assert len(data["dental_services"]) >= 3
+    assert data["source_gap"] is False
+    assert "offline" in data["reply"].lower()
+    assert all(item["postcode"] for item in data["dental_services"])
+    assert all(item["map_url"].startswith("https://www.google.com/maps/search/") for item in data["dental_services"])
     assert any("111.wales.nhs.uk" in source["url"] for source in data["sources"])
 
 

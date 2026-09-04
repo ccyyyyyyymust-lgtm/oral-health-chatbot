@@ -5,6 +5,7 @@ from nhs_services import (
     format_services_for_model,
     is_dentist_search_query,
     is_wales_postcode,
+    search_wales_dentists_offline,
 )
 import asyncio
 import httpx
@@ -60,6 +61,15 @@ def test_map_url_uses_practice_address_and_postcode():
     assert service.map_url.startswith("https://www.google.com/maps/search/?api=1&query=")
     assert "Example+Dental+Practice" in service.map_url
     assert "CW9+1AA" in service.map_url
+
+
+def test_wales_offline_search_returns_at_least_three_local_results():
+    services = search_wales_dentists_offline("CF10 3UP")
+
+    assert len(services) >= 3
+    assert all(service.postcode for service in services)
+    assert all(service.map_url.startswith("https://www.google.com/maps/search/") for service in services)
+    assert all(service.postcode.startswith("CF10") for service in services[:3])
 
 
 def test_full_postcode_falls_back_to_outward_district(monkeypatch):
