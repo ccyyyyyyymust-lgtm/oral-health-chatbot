@@ -99,7 +99,7 @@ conda create -n oral-health-chatbot python -y
 conda activate oral-health-chatbot
 ```
 
-### 2. Install and start the backend
+### 2. Install the backend dependencies
 
 From the repository root:
 
@@ -108,7 +108,30 @@ cd backend
 python -m pip install -r requirements-dev.txt
 ```
 
-Copy `backend/.env.example` to `backend/.env`. The application works without external API credentials by using its tested local fallback. Optional integrations can be enabled in `backend/.env`:
+### 3. Add the supplied configuration file
+
+Because this repository is public, API keys and other credentials are not stored in GitHub. If you received a `.env.example` file as an email attachment, use it as follows:
+
+1. Download the attached `.env.example` file.
+2. Open the downloaded project folder, then open the `backend` folder.
+3. Place the downloaded `.env.example` file inside `backend`.
+4. Make a copy of that file in the same folder.
+5. Rename the copy from `.env.example` to `.env`.
+6. If Windows warns that changing the file extension may make the file unusable, select **Yes**.
+
+After this step, the folder should contain both files:
+
+```text
+backend/
+├── .env.example
+└── .env
+```
+
+The backend reads local settings from `.env`; it does not read secrets from `.env.example`. If file extensions are hidden in Windows, enable **View → Show → File name extensions** in File Explorer before renaming the file.
+
+The application can run without API credentials by using its built-in fallback mode. The optional Hugging Face model and live NHS Service Search features only work when their credentials have been added to the local `.env` file.
+
+The backend configuration has the following format:
 
 ```env
 HF_TOKEN=
@@ -125,9 +148,9 @@ RATE_LIMIT_REQUESTS=20
 RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
-Never commit API keys or the real `.env` file to GitHub.
+Keep the `.env` file inside the local `backend` folder. It is already excluded from Git by the project's `.gitignore` file.
 
-Start the backend:
+### 4. Start the backend
 
 ```bash
 python -m uvicorn main:app --reload --port 8000
@@ -135,7 +158,7 @@ python -m uvicorn main:app --reload --port 8000
 
 The backend will be available at `http://127.0.0.1:8000`, and the interactive API documentation will be at `http://127.0.0.1:8000/docs`.
 
-### 3. Install and start the frontend
+### 5. Install and start the frontend
 
 Open a second terminal, return to the repository root, and run:
 
