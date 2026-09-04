@@ -112,12 +112,11 @@ python -m pip install -r requirements-dev.txt
 
 Because this repository is public, API keys and other credentials are not stored in GitHub. If you received a `.env.example` file as an email attachment, use it as follows:
 
-1. Download the attached `.env.example` file.
+1. Download the attached `.env.` file.
 2. Open the downloaded project folder, then open the `backend` folder.
-3. Place the downloaded `.env.example` file inside `backend`.
+3. Place the downloaded `.env.` file inside `backend`.
 4. Make a copy of that file in the same folder.
-5. Rename the copy from `.env.example` to `.env`.
-6. If Windows warns that changing the file extension may make the file unusable, select **Yes**.
+5. If Windows warns that changing the file extension may make the file unusable, select **Yes**.
 
 After this step, the folder should contain both files:
 
